@@ -29,6 +29,13 @@ Built for MikroTik deployments — rate limits are written as
 
 FreeRADIUS, MariaDB and Samba are installed for you if they are not present.
 
+If you would rather install and configure them yourself — because you already
+run FreeRADIUS, because the installer failed partway, or because you want to
+see exactly what it changes — follow
+**[docs/manual-install.md](docs/manual-install.md)**. It covers each package,
+which ones are easy to miss, the two FreeRADIUS defaults that silently make it
+ignore your database, and a check after every step.
+
 ## Install
 
 ```bash
@@ -94,6 +101,10 @@ Domains=~ad.example.com
 
 Then `systemctl restart systemd-resolved`. This keeps normal DNS on your usual
 resolver and sends only the AD zone to the controller.
+
+The manual equivalent of everything the Directory page does, including the
+`rlm_mschap` rule that keeps local users working once AD is wired in, is in
+[docs/manual-install.md](docs/manual-install.md#3-samba-and-kerberos--only-for-active-directory).
 
 Once joined, **Users → Map directory account** assigns a domain account to a
 group. The account keeps its password in the directory; the rows written here
