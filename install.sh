@@ -204,6 +204,20 @@ Wants=mariadb.service
 Restart=on-failure
 RestartSec=5s
 EOF
+    # Stop FreeRADIUS storing the user's password in radpostauth. The stock
+    # query keeps whatever the client sent; under PAP that is the real
+    # password, and for a directory account it is a working domain credential
+    # sitting readable in the database. The audit trail -- who, when, accepted
+    # or rejected -- is unaffected.
+    for q in "$FR_DIR"/mods-config/sql/main/*/queries.conf; do
+        [ -f "$q" ] || continue
+        if grep -q "%{%{User-Password}:-%{Chap-Password}}" "$q"; then
+            cp -a "$q" "$q.bak.$(date +%Y%m%d-%H%M%S)"
+            sed -i "s/'%{%{User-Password}:-%{Chap-Password}}'/''/" "$q"
+        fi
+    done
+    info "post-auth logging will not store passwords"
+
     if freeradius -XC >/tmp/fr-check.log 2>&1; then
         systemctl daemon-reload
         systemctl enable freeradius >/dev/null 2>&1 || true

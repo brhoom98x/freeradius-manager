@@ -224,6 +224,18 @@ to the hotspot profile at the same time.
 > postauth_query = "INSERT INTO radpostauth (username, pass, reply, authdate) \
 >     VALUES ('%{SQL-User-Name}', '', '%{reply:Packet-Type}', '%S.%M')"
 > ```
+>
+> `install.sh` now does this for you. To clear passwords already stored, assign
+> `authdate` to itself as well:
+>
+> ```sql
+> UPDATE radpostauth SET pass = '', authdate = authdate;
+> ```
+>
+> That second assignment is not decoration. `authdate` is declared
+> `ON UPDATE current_timestamp`, so a plain `SET pass = ''` rewrites every
+> row's timestamp to the moment you run it — destroying the audit trail you
+> were trying to protect.
 
 ---
 

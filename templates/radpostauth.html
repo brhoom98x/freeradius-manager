@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_icons.html" import icon %}
 {% block title %}Post-Auth Log — RADIUS Admin{% endblock %}
 {% block content %}
   <div class="page-header">
@@ -6,6 +7,11 @@
     <span class="muted">last 50 rows</span>
   </div>
 
+  {# The password column is deliberately absent. FreeRADIUS's stock post-auth
+     query stores whatever the client sent, which under PAP is the user's real
+     password — a directory password, for AD-backed accounts. install.sh blanks
+     that field in queries.conf, and showing it here would only put credentials
+     on screen. Who, when and the outcome are what an audit trail needs. #}
   {% if not error and not rows %}
     <p class="empty">No post-auth records found.</p>
   {% elif not error %}
@@ -15,8 +21,7 @@
           <tr>
             <th>ID</th>
             <th>Username</th>
-            <th>Password</th>
-            <th>Reply</th>
+            <th>Result</th>
             <th>Auth Date</th>
           </tr>
         </thead>
@@ -25,13 +30,32 @@
             <tr>
               <td>{{ row.id }}</td>
               <td>{{ row.username }}</td>
-              <td>{{ row.pass }}</td>
-              <td>{{ row.reply }}</td>
+              <td>
+                {% if row.reply == 'Access-Accept' %}
+                  <span class="pill pill-ok">{{ icon('check', 12) }} accepted</span>
+                {% elif row.reply == 'Access-Reject' %}
+                  <span class="pill pill-bad">{{ icon('x', 12) }} rejected</span>
+                {% else %}
+                  <span class="pill">{{ row.reply }}</span>
+                {% endif %}
+              </td>
               <td>{{ row.authdate }}</td>
             </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
+
+    {% if rows | selectattr('pass') | first is defined %}
+      <div class="flash flash-error">
+        {{ icon('alert') }}
+        Some of these rows still hold a stored password. FreeRADIUS is no longer
+        writing them, but the old values remain. Clear them with
+        <code>UPDATE radpostauth SET pass = '', authdate = authdate;</code> —
+        assigning <code>authdate</code> to itself is required, because the column
+        is <code>ON UPDATE current_timestamp</code> and a plain
+        <code>SET pass = ''</code> silently rewrites every timestamp to now.
+      </div>
+    {% endif %}
   {% endif %}
 {% endblock %}
