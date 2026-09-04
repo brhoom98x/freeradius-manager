@@ -44,7 +44,11 @@ PrivateDevices=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# AF_NETLINK is not optional when the domain-join feature is used: Samba
+# enumerates network interfaces over netlink, and without it every net and
+# wbinfo call fails with "Could not determine network interfaces" -- which
+# surfaces in the UI as the host simply not being joined.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 RestrictSUIDSGID=false
 LockPersonality=true
 

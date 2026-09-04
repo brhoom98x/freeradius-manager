@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Accounting — RADIUS Admin{% endblock %}
+{% block content %}
+  <div class="page-header">
+    <h1>Accounting</h1>
+    <span class="muted">last 50 rows</span>
+  </div>
+
+  {% if not error and not rows %}
+    <p class="empty">No accounting records found.</p>
+  {% elif not error %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Username</th>
+            <th>NAS IP</th>
+            <th>Calling Station</th>
+            <th>Framed IP</th>
+            <th>Start</th>
+            <th>Stop</th>
+            <th>Session (s)</th>
+            <th>In (bytes)</th>
+            <th>Out (bytes)</th>
+            <th>Terminate Cause</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+            <tr>
+              <td>{{ row.radacctid }}</td>
+              <td>{{ row.username }}</td>
+              <td>{{ row.nasipaddress }}</td>
+              <td>{{ row.callingstationid }}</td>
+              <td>{{ row.framedipaddress }}</td>
+              <td>{{ row.acctstarttime or "" }}</td>
+              <td>{{ row.acctstoptime or "" }}</td>
+              <td>{{ row.acctsessiontime if row.acctsessiontime is not none else "" }}</td>
+              <td>{{ row.acctinputoctets if row.acctinputoctets is not none else "" }}</td>
+              <td>{{ row.acctoutputoctets if row.acctoutputoctets is not none else "" }}</td>
+              <td>{{ row.acctterminatecause or "" }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+{% endblock %}

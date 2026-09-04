@@ -98,11 +98,28 @@ else
     info "schema already present, leaving the data alone"
 fi
 
-# FreeRADIUS's own account: full rights on the RADIUS database
-RADIUS_DB_PASS="$(secret 32)"
+# FreeRADIUS's own account: full rights on the RADIUS database.
+#
+# Its password is only rotated when we are also going to write the new value
+# into the FreeRADIUS config below. Rotating it while SKIP_RADIUS_CONF=yes
+# would leave the server holding a password that no longer works, and RADIUS
+# would fail at its next restart rather than immediately -- long after anyone
+# would connect the two events.
+RADIUS_USER_EXISTS=$(mysql -N -e "SELECT 1 FROM mysql.user WHERE user='$RADIUS_DB_USER' AND host='localhost';")
 mysql -e "CREATE USER IF NOT EXISTS '$RADIUS_DB_USER'@'localhost';
-          SET PASSWORD FOR '$RADIUS_DB_USER'@'localhost' = PASSWORD('$RADIUS_DB_PASS');
           GRANT ALL ON \`$DB_NAME\`.* TO '$RADIUS_DB_USER'@'localhost';"
+
+if [ "$SKIP_RADIUS_CONF" = "yes" ] && [ -n "$RADIUS_USER_EXISTS" ]; then
+    RADIUS_DB_PASS=""
+    info "leaving the existing '$RADIUS_DB_USER' password alone"
+else
+    RADIUS_DB_PASS="$(secret 32)"
+    mysql -e "SET PASSWORD FOR '$RADIUS_DB_USER'@'localhost' = PASSWORD('$RADIUS_DB_PASS');"
+    if [ "$SKIP_RADIUS_CONF" = "yes" ]; then
+        info "created '$RADIUS_DB_USER'; put this password in the FreeRADIUS sql module:"
+        info "    $RADIUS_DB_PASS"
+    fi
+fi
 
 # The web UI's account: it must never be able to read or write anything else.
 # Accounting and post-auth are history, so they stay read-only.
