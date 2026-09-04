@@ -128,11 +128,71 @@ because this host sits on a management VLAN with no internet route.
    timeout, idle timeout and simultaneous-use
 10. Active sessions (read-only)
 11. NAS / clients list (read-only)
-12. Last 50 rows of radacct and radpostauth (read-only)
+12. Last 50 rows of radacct and radpostauth (read-only). The post-auth view
+    deliberately has no password column -- see "Never log the password" below
+13. Directory page: join this host to Active Directory, leave it, and re-apply
+    the FreeRADIUS wiring, through the privileged helper
+
+## The privileged helper
+The app runs unprivileged and may run exactly one program as root:
+`deploy/radmgr-helper`, under a single sudoers entry naming that absolute path.
+It accepts four verbs and nothing else. Rules for changing it:
+
+- Validate every value against a strict pattern and *reject* what does not
+  match. Do not escape and pass through. It runs as root on behalf of a web
+  form.
+- Never build a shell command string. `subprocess` always gets an argument
+  list.
+- Secrets arrive in the JSON payload on stdin, never in argv, where `ps` would
+  expose them. They are not logged, not echoed back in errors (see `_scrub`),
+  and not written to disk.
+- The helper must stay root-owned and not writable by the service account, or
+  the app could rewrite the one thing it is allowed to run as root.
+
+Two systemd settings cannot be tightened while this feature exists, and the
+unit says so: `NoNewPrivileges` must be false or sudo cannot elevate, and
+`RestrictAddressFamilies` must include `AF_NETLINK` or every `net`/`wbinfo`
+call fails with "Could not determine network interfaces" -- which surfaces in
+the UI as the host simply not being joined. `ProtectSystem` is `full`, not
+`strict`, because the helper writes /etc.
+
+## How each authentication method reaches the directory
+Joining wires two separate paths, and they are easy to confuse:
+
+- **MS-CHAP** -- `rlm_mschap`'s own `ntlm_auth` setting. Once set, rlm_mschap
+  sends *every* MS-CHAP request to the directory, so both virtual servers carry
+  a rule setting `MS-CHAP-Use-NTLM-Auth := No` whenever SQL already supplied a
+  password. Without it, local users stop authenticating.
+- **PAP** -- the separate `ntlm_auth` exec module, selected by an `elsif
+  (&User-Password)` branch on that same rule. rlm_pap needs a known-good
+  password to compare against, so a directory account would otherwise fail with
+  "No Auth-Type found" before the directory was consulted. MikroTik hotspots in
+  http-pap mode land here.
+- **CHAP** -- cannot work against a directory at all, and no configuration
+  changes that. Verifying CHAP needs the cleartext password, which the client
+  never sends and AD never discloses. MikroTik hotspot uses CHAP by default.
+
+`configure_pap` notes the one wart: the plaintext reaches ntlm_auth in argv,
+because rlm_exec cannot feed a child on stdin. Documented rather than hidden.
+
+## Never log the password
+FreeRADIUS's stock post-auth query stores whatever the client sent. Under CHAP
+that was a useless hash; under PAP it is the real password, and for a directory
+account a working domain credential. `install.sh` blanks that field in every
+dialect's `queries.conf`, and the Post-Auth page has no password column. Do not
+add one back.
+
+When clearing rows that still hold one, `authdate` must be assigned to itself:
+
+    UPDATE radpostauth SET pass = '', authdate = authdate;
+
+The column is `ON UPDATE current_timestamp`, so a plain `SET pass = ''`
+rewrites every timestamp to the moment it runs, destroying the audit trail the
+change exists to protect.
 
 ## Out of scope
-Multiple admin accounts or roles, per-admin audit log, editing NAS entries,
-charts, bulk import, REST API, Docker.
+Multiple admin accounts or roles, per-admin audit log, editing NAS entries
+or shared secrets, charts, bulk import, REST API, Docker.
 
 ## Constraints
 - Parameterised SQL queries only, never string interpolation. Where a table
