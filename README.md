@@ -44,20 +44,32 @@ cd freeradius-manager
 sudo ./install.sh
 ```
 
-The installer asks for an admin username and password, then:
+The installer asks for an admin username and password, then does the following.
+Each step links to what it changed and how to do it by hand:
 
-1. installs FreeRADIUS, MariaDB and the Python dependencies
-2. creates the `radius` database and loads the stock FreeRADIUS schema
-   (an existing database is detected and left alone)
-3. creates two database accounts — one for FreeRADIUS with full rights, one
-   for the web UI with deliberately narrow grants
-4. switches FreeRADIUS's SQL module from the default SQLite to MariaDB and
-   orders it after the database so a reboot cannot race
-5. generates a self-signed TLS certificate
-6. installs and enables a systemd service
+1. installs FreeRADIUS, MariaDB and the Python dependencies —
+   [which packages, and the two that are easy to miss](docs/manual-install.md#2-freeradius)
+2. creates the `radius` database and loads the stock FreeRADIUS schema, leaving
+   an existing database alone —
+   [what the tables are for](docs/manual-install.md#21-create-the-database-and-load-the-schema)
+3. creates two database accounts, one for FreeRADIUS with full rights and one
+   for the web UI with deliberately narrow grants —
+   [why two, and the exact grants](docs/manual-install.md#22-two-database-accounts)
+4. switches FreeRADIUS's SQL module from its default SQLite to MariaDB, and
+   orders it after the database so a reboot cannot race —
+   [the default that makes FreeRADIUS silently ignore your data](docs/manual-install.md#23-point-freeradius-at-mariadb)
+5. generates a self-signed TLS certificate, and
+6. installs and enables a systemd service —
+   [both, plus how to swap in a real certificate](docs/manual-install.md#4-the-web-ui-itself)
 
 When it finishes it prints the URL. The certificate is self-signed, so your
 browser will warn once.
+
+**New to RADIUS?** Start with
+**[docs/getting-started.md](docs/getting-started.md)** — what RADIUS is doing,
+then adding your first router, group and user, and testing it before any
+hardware is involved. It covers the step people miss most often: a router that
+is not listed in `clients.conf` is ignored silently, with no error anywhere.
 
 Unattended:
 
