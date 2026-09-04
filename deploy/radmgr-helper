@@ -34,6 +34,9 @@ SMB = "/etc/samba/smb.conf"
 MSCHAP = "/etc/freeradius/3.0/mods-available/mschap"
 NTLM_MOD = "/etc/freeradius/3.0/mods-available/ntlm_auth"
 SITES = "/etc/freeradius/3.0/sites-available"
+MODS_AVAILABLE = "/etc/freeradius/3.0/mods-available"
+MODS_ENABLED = "/etc/freeradius/3.0/mods-enabled"
+APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BACKUP_DIR = "/var/backups/freeradius-manager"
 
 # Deliberately tight. A realm or account name that does not match is rejected
@@ -273,6 +276,7 @@ def cmd_join():
     # freeradius must restart to pick up winbindd_priv group membership
     configure_ntlm_auth(workgroup.upper())
     configure_pap(workgroup.upper())
+    configure_ad_policy(APP_DIR)
     run(["systemctl", "restart", "freeradius"], timeout=45)
 
     code, out = run(["net", "ads", "testjoin"], timeout=25)
@@ -439,11 +443,90 @@ def configure_pap(workgroup):
     return changed
 
 
+def configure_ad_policy(app_dir):
+    """Have FreeRADIUS ask the directory for a user's group policy at login.
+
+    Two exec modules, because rlm_exec merges its output into one list and
+    reply items and check items go to different places. Both call the same
+    script; the group lookup is an NSS call that winbind caches, so the second
+    invocation is cheap.
+
+    Selected only when SQL found nothing for the user -- no local password and
+    no radusergroup row -- so an account configured by hand always wins over
+    whatever its AD groups say.
+    """
+    changed = False
+    script = os.path.join(app_dir, "deploy", "ad-policy")
+
+    modules = {
+        "ad_policy": ("reply", ""),
+        "ad_policy_check": ("control", "--check "),
+    }
+    for name, (output, flag) in modules.items():
+        path = os.path.join(MODS_AVAILABLE, name)
+        body = (
+            "#  Written by freeradius-manager. Resolves a directory account's\n"
+            "#  policy from its AD group membership. See the Directory groups\n"
+            "#  page; the mapping lives in %s/ad_group_map.json.\n"
+            "exec %s {\n"
+            "\twait = yes\n"
+            "\tprogram = \"%s %s%%{User-Name}\"\n"
+            "\toutput_pairs = %s\n"
+            "\tshell_escape = yes\n"
+            "\ttimeout = 5\n"
+            "}\n" % (app_dir, name, script, flag, output)
+        )
+        if not os.path.exists(path) or open(path).read() != body:
+            if os.path.exists(path):
+                backup(path)
+            open(path, "w").write(body)
+            changed = True
+        link = os.path.join(MODS_ENABLED, name)
+        if not os.path.islink(link):
+            try:
+                os.symlink(path, link)
+                changed = True
+            except OSError:
+                pass
+
+    BLOCK = (
+        "\n"
+        "\t#  Directory accounts with no policy of their own: ask AD which\n"
+        "\t#  groups they are in and apply the mapped RADIUS group. Anything\n"
+        "\t#  configured by hand has already matched above and skips this.\n"
+        "\tif (!&control:Cleartext-Password && !&control:NT-Password \\\n"
+        "\t    && !&reply:Mikrotik-Rate-Limit) {\n"
+        "\t\tupdate control {\n"
+        "\t\t\t&Tmp-String-0 := \"%{User-Name}\"\n"
+        "\t\t}\n"
+        "\t\t-ad_policy\n"
+        "\t\t-ad_policy_check\n"
+        "\t}\n"
+    )
+
+    for site in ("default", "inner-tunnel"):
+        path = os.path.join(SITES, site)
+        if not os.path.exists(path):
+            continue
+        text = open(path).read()
+        if "-ad_policy" in text:
+            continue
+        marker = "\t\t\t&Auth-Type := ntlm_auth\n\t\t}\n\t}\n"
+        if marker not in text:
+            continue
+        backup(path)
+        open(path, "w").write(text.replace(marker, marker + BLOCK, 1))
+        changed = True
+
+    return changed
+
+
 def cmd_configure():
     payload = read_payload()
     workgroup = need(payload, "workgroup", RE_WORKGROUP, "NetBIOS domain")
     changed = configure_ntlm_auth(workgroup.upper())
     changed = configure_pap(workgroup.upper()) or changed
+    changed = configure_ad_policy(APP_DIR) or changed
     code, out = run(["freeradius", "-XC"], timeout=45)
     if code != 0:
         fail("FreeRADIUS rejected the configuration", detail=out.strip()[-400:])

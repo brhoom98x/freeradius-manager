@@ -175,6 +175,32 @@ Joining wires two separate paths, and they are easy to confuse:
 `configure_pap` notes the one wart: the plaintext reaches ntlm_auth in argv,
 because rlm_exec cannot feed a child on stdin. Documented rather than hidden.
 
+## AD group mapping
+`admap.py` and `deploy/ad-policy` map an AD group to a RADIUS group. The
+mapping lives in `ad_group_map.json`, not the database, because the schema is
+off limits and this is application configuration. Both the web app and
+FreeRADIUS read that one file, so there is no second source of truth and no
+second credential.
+
+`deploy/ad-policy` runs as the *freeradius* user on every request for an
+account with no policy of its own, so:
+
+- it must not import the web app or anything from its venv, which that user
+  cannot read. Database credentials come from the FreeRADIUS SQL module config,
+  the one file it is already entitled to read.
+- `REPLY_ATTRS` mirrors `db.GROUP_ATTRS` by hand. Adding an attribute there
+  means adding it here too.
+- exit 1 means "nothing to say" and authentication continues. Never fail hard.
+
+**Never parse `id -Gn` for group membership.** It separates names with spaces
+and AD group names routinely contain them, so "domain users" arrives as two
+groups and a mapping to it silently never matches. Use `pwd.getpwnam` plus
+`os.getgrouplist` and resolve the gids, which is unambiguous.
+
+Precedence is enforced by the condition in the virtual servers: the exec
+modules run only when SQL produced no reply attribute, so a per-user override
+or an individually assigned group always wins over the AD mapping.
+
 ## Never log the password
 FreeRADIUS's stock post-auth query stores whatever the client sent. Under CHAP
 that was a useless hash; under PAP it is the real password, and for a directory

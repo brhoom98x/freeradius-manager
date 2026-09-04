@@ -45,7 +45,9 @@ secret() { python3 -c "import secrets,string;print(''.join(secrets.choice(string
 
 say "Installing packages"
 export DEBIAN_FRONTEND=noninteractive
-PKGS="python3 python3-venv python3-pip mariadb-server freeradius freeradius-mysql openssl"
+# python3-pymysql is for deploy/ad-policy, which FreeRADIUS runs as its own
+# user and so cannot use the app's venv
+PKGS="python3 python3-venv python3-pip python3-pymysql mariadb-server freeradius freeradius-mysql openssl"
 if [ "$SKIP_AD" != "yes" ]; then
     PKGS="$PKGS winbind libnss-winbind samba-common-bin krb5-user"
 fi

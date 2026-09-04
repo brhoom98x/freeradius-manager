@@ -14,6 +14,7 @@ from flask import (
 from werkzeug.security import check_password_hash
 
 import ad
+import admap
 import db
 
 load_dotenv()
@@ -549,6 +550,106 @@ def directory_reapply():
     except Exception as exc:
         flash(str(exc), "error")
     return redirect(url_for("directory"))
+
+
+@app.route("/directory/groups", methods=["GET"])
+@login_required
+def directory_groups():
+    """Map AD groups to RADIUS groups. First match wins, so order matters."""
+    try:
+        radius_groups = db.list_groups()
+    except Exception as exc:
+        return render_template(
+            "directory_groups.html", mappings=[], ad_groups=[], ad_up=False,
+            radius_groups=[], error=str(exc)
+        )
+
+    ad_groups = ad.list_groups()
+    mappings = admap.load()
+    mapped = {m["ad_group"].lower() for m in mappings}
+
+    # flag mappings whose RADIUS group has since been deleted -- they would
+    # silently resolve to nothing at authentication time
+    for m in mappings:
+        m["missing"] = m["radius_group"] not in radius_groups
+
+    return render_template(
+        "directory_groups.html",
+        mappings=mappings,
+        ad_groups=[g for g in ad_groups if g.lower() not in mapped],
+        ad_up=bool(ad_groups),
+        radius_groups=radius_groups,
+        error=None,
+    )
+
+
+@app.route("/directory/groups/add", methods=["POST"])
+@login_required
+def directory_groups_add():
+    try:
+        admap.add(
+            request.form.get("ad_group", ""),
+            request.form.get("radius_group", ""),
+        )
+        flash("Mapped '%s'." % request.form.get("ad_group", "").strip(), "success")
+    except Exception as exc:
+        flash(str(exc), "error")
+    return redirect(url_for("directory_groups"))
+
+
+@app.route("/directory/groups/remove", methods=["POST"])
+@login_required
+def directory_groups_remove():
+    name = request.form.get("ad_group", "").strip()
+    try:
+        admap.remove(name)
+        flash("Removed the mapping for '%s'." % name, "success")
+    except Exception as exc:
+        flash(str(exc), "error")
+    return redirect(url_for("directory_groups"))
+
+
+@app.route("/directory/groups/move", methods=["POST"])
+@login_required
+def directory_groups_move():
+    try:
+        admap.move(
+            request.form.get("ad_group", ""),
+            request.form.get("direction", ""),
+        )
+    except Exception as exc:
+        flash(str(exc), "error")
+    return redirect(url_for("directory_groups"))
+
+
+@app.route("/directory/groups/test", methods=["POST"])
+@login_required
+def directory_groups_test():
+    """Show what a named account would actually resolve to, before trusting it."""
+    username = request.form.get("username", "").strip()
+    groups = ad.user_groups(username) if username else []
+    if not username:
+        flash("Enter a username to test.", "error")
+    elif not groups:
+        flash(
+            "The directory returned no groups for '%s'. Check the spelling, or "
+            "that the account exists." % username, "error",
+        )
+    else:
+        resolved = admap.resolve(groups)
+        if resolved:
+            flash(
+                "'%s' is in: %s — first mapped group wins, so it gets the "
+                "'%s' policy." % (username, ", ".join(groups), resolved),
+                "success",
+            )
+        else:
+            flash(
+                "'%s' is in: %s — none of those are mapped, so it would get no "
+                "policy from the directory." % (username, ", ".join(groups)),
+                "error",
+            )
+    return redirect(url_for("directory_groups"))
 
 
 # --- read-only views ---------------------------------------------------------

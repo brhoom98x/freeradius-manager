@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+"""Resolve a directory user's RADIUS policy from their AD group membership.
+
+Called by FreeRADIUS through rlm_exec on every request for an account that has
+no policy of its own. Prints RADIUS attribute pairs on stdout, which rlm_exec
+merges into the reply (or the control list, with --check).
+
+    ad-policy <username>            reply items: rate limit, timeouts
+    ad-policy --check <username>    check items: Simultaneous-Use
+
+Exit status matters to FreeRADIUS: 0 means "attributes follow", 1 means
+"nothing to say" (rlm_exec treats it as notfound and moves on). Anything
+printed on stderr ends up in the FreeRADIUS log.
+
+This runs as the freeradius user on every authentication, so it must be fast
+and must never hang. Group lookup goes through NSS, which winbind caches, and
+the database credentials are read from the FreeRADIUS SQL module config -- the
+one file this process is already entitled to read. No second credential store.
+"""
+import grp
+import json
+import os
+import pwd
+import re
+import sys
+
+APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MAP_FILE = os.environ.get("AD_GROUP_MAP", os.path.join(APP_DIR, "ad_group_map.json"))
+SQL_CONF = "/etc/freeradius/3.0/mods-available/sql"
+TIMEOUT = 5
+
+# Mirrors db.GROUP_ATTRS. Kept as a literal because this script runs as the
+# freeradius user and must not import the web app or its dependencies.
+REPLY_ATTRS = ["Mikrotik-Rate-Limit", "Session-Timeout", "Idle-Timeout"]
+CHECK_ATTRS = ["Simultaneous-Use"]
+
+
+def fail(message):
+    """Say nothing to the reply, explain on stderr, and let auth continue."""
+    print(message, file=sys.stderr)
+    sys.exit(1)
+
+
+def user_ad_groups(username):
+    """Group names for a user, via NSS so winbind's cache is used.
+
+    Not `id -Gn`: that separates names with spaces, and AD group names
+    routinely contain them, so "domain users" would arrive as two groups and
+    a mapping to it could never match. gids resolve unambiguously.
+    """
+    try:
+        entry = pwd.getpwnam(username)
+    except KeyError:
+        return []
+    try:
+        gids = os.getgrouplist(username, entry.pw_gid)
+    except OSError:
+        return []
+
+    names = []
+    for gid in gids:
+        try:
+            names.append(grp.getgrgid(gid).gr_name)
+        except KeyError:
+            continue
+    return names
+
+
+def mapped_group(groups):
+    """First mapped RADIUS group, honouring the order in the file."""
+    try:
+        with open(MAP_FILE) as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    have = {g.lower() for g in groups}
+    for row in data.get("mappings", []):
+        ad = (row.get("ad_group") or "").strip().lower()
+        radius = (row.get("radius_group") or "").strip()
+        if ad and radius and ad in have:
+            return radius
+    return None
+
+
+def db_settings():
+    """Read the database connection out of the FreeRADIUS SQL module."""
+    try:
+        text = open(SQL_CONF).read()
+    except OSError as exc:
+        fail("cannot read %s: %s" % (SQL_CONF, exc))
+
+    def value(key, default=None):
+        match = re.search(r'^\s*%s\s*=\s*"?([^"\n]+)"?' % key, text, re.M)
+        return match.group(1).strip() if match else default
+
+    return {
+        "host": value("server", "localhost"),
+        "user": value("login"),
+        "password": value("password"),
+        "database": value("radius_db", "radius"),
+    }
+
+
+def group_attributes(radius_group, table, wanted):
+    settings = db_settings()
+    if not settings["user"]:
+        fail("no database login found in %s" % SQL_CONF)
+    try:
+        import pymysql
+    except ImportError:
+        fail("pymysql is not available to the freeradius user")
+
+    try:
+        conn = pymysql.connect(
+            host=settings["host"], user=settings["user"],
+            password=settings["password"] or "", database=settings["database"],
+            connect_timeout=TIMEOUT, read_timeout=TIMEOUT,
+        )
+    except Exception as exc:
+        fail("database connection failed: %s" % exc)
+
+    try:
+        with conn.cursor() as cur:
+            placeholders = ",".join(["%s"] * len(wanted))
+            cur.execute(
+                "SELECT attribute, value FROM " + table +
+                " WHERE groupname = %s AND attribute IN (" + placeholders + ")",
+                [radius_group] + wanted,
+            )
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def main():
+    args = sys.argv[1:]
+    check_mode = "--check" in args
+    args = [a for a in args if a != "--check"]
+    if len(args) != 1 or not args[0]:
+        fail("usage: ad-policy [--check] <username>")
+
+    username = args[0]
+    # A local account has its own rows; this script is only for directory
+    # accounts, and answering for a local one would override them.
+    groups = user_ad_groups(username)
+    if not groups:
+        fail("no directory groups for %s" % username)
+
+    radius_group = mapped_group(groups)
+    if not radius_group:
+        fail("none of %s's groups are mapped" % username)
+
+    table = "radgroupcheck" if check_mode else "radgroupreply"
+    wanted = CHECK_ATTRS if check_mode else REPLY_ATTRS
+    rows = group_attributes(radius_group, table, wanted)
+    if not rows:
+        fail("group %s has no %s attributes" % (radius_group, table))
+
+    for attribute, value in rows:
+        # rlm_exec parses one "Attribute = value" pair per line
+        print('%s = "%s"' % (attribute, str(value).replace('"', "")))
+
+
+if __name__ == "__main__":
+    main()

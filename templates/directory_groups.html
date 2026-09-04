@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% from "_icons.html" import icon %}
+{% block title %}Directory groups — RADIUS Admin{% endblock %}
+{% block content %}
+  <div class="page-header">
+    <h1>Directory groups</h1>
+    <a class="btn btn-sm" href="{{ url_for('directory') }}">{{ icon('shield') }} Directory status</a>
+  </div>
+
+  <p class="hint" style="max-width:62rem">
+    Give a whole Active Directory group a RADIUS policy, instead of mapping
+    people one at a time. At login FreeRADIUS asks the directory which groups
+    the account is in and applies the first mapping that matches — so the
+    <strong>order below decides the outcome</strong> for anyone in more than
+    one mapped group. Put the narrower rule above the broader one.
+  </p>
+
+  {% if not ad_up %}
+    <div class="flash flash-error">
+      {{ icon('alert') }}
+      The directory is not answering, so groups cannot be listed. Existing
+      mappings still apply — this page just cannot offer new ones.
+    </div>
+  {% endif %}
+
+  <h2 class="section-title">Mappings</h2>
+  {% if not mappings %}
+    <p class="empty">Nothing mapped yet. Directory accounts fall back to whatever
+      you have assigned them individually on the Users page.</p>
+  {% else %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Order</th>
+            <th>Directory group</th>
+            <th>RADIUS policy</th>
+            <th class="actions-col">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for m in mappings %}
+            <tr>
+              <td class="muted">{{ loop.index }}</td>
+              <td><code>{{ m.ad_group }}</code></td>
+              <td>
+                {% if m.missing %}
+                  <span class="pill pill-bad" title="This RADIUS group no longer exists">
+                    {{ icon('alert', 12) }} {{ m.radius_group }} — missing
+                  </span>
+                {% else %}
+                  <a class="badge" href="{{ url_for('edit_group', groupname=m.radius_group) }}">{{ m.radius_group }}</a>
+                {% endif %}
+              </td>
+              <td class="actions">
+                <form class="inline" method="post" action="{{ url_for('directory_groups_move') }}">
+                  <input type="hidden" name="ad_group" value="{{ m.ad_group }}">
+                  <input type="hidden" name="direction" value="up">
+                  <button type="submit" class="btn btn-sm btn-icon" title="Move up"
+                          aria-label="Move {{ m.ad_group }} up" {{ 'disabled' if loop.first else '' }}>&uarr;</button>
+                </form>
+                <form class="inline" method="post" action="{{ url_for('directory_groups_move') }}">
+                  <input type="hidden" name="ad_group" value="{{ m.ad_group }}">
+                  <input type="hidden" name="direction" value="down">
+                  <button type="submit" class="btn btn-sm btn-icon" title="Move down"
+                          aria-label="Move {{ m.ad_group }} down" {{ 'disabled' if loop.last else '' }}>&darr;</button>
+                </form>
+                <form class="inline" method="post" action="{{ url_for('directory_groups_remove') }}"
+                      data-confirm="Remove the mapping for {{ m.ad_group }}?">
+                  <input type="hidden" name="ad_group" value="{{ m.ad_group }}">
+                  <button type="submit" class="btn btn-sm btn-icon btn-danger" title="Remove mapping"
+                          aria-label="Remove the mapping for {{ m.ad_group }}">{{ icon('trash') }}</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+
+  <div class="split" style="margin-top:1.5rem">
+    <div class="card card-wide">
+      <h2>Add a mapping</h2>
+      {% if not radius_groups %}
+        <p class="empty">Create a RADIUS group first — that is where the rate
+          limit lives.</p>
+      {% else %}
+        <form method="post" action="{{ url_for('directory_groups_add') }}">
+          <div class="field">
+            <label for="ad_group">{{ icon('shield') }} Directory group</label>
+            {% if ad_groups %}
+              <input type="text" id="ad_group" name="ad_group" list="ad-group-list"
+                     required autocomplete="off" placeholder="Start typing a name">
+              <datalist id="ad-group-list">
+                {% for g in ad_groups %}<option value="{{ g }}"></option>{% endfor %}
+              </datalist>
+              <p class="hint">{{ ad_groups | length }} unmapped group{{ '' if ad_groups | length == 1 else 's' }}.</p>
+            {% else %}
+              <input type="text" id="ad_group" name="ad_group" required autocomplete="off">
+              <p class="hint">
+                {% if ad_up %}Every directory group is already mapped.
+                {% else %}Type the group name as the directory reports it.{% endif %}
+              </p>
+            {% endif %}
+          </div>
+          <div class="field">
+            <label for="radius_group">{{ icon('layers') }} RADIUS policy</label>
+            <select id="radius_group" name="radius_group" required>
+              <option value="">— pick a group —</option>
+              {% for g in radius_groups %}<option value="{{ g }}">{{ g }}</option>{% endfor %}
+            </select>
+            <p class="hint">The rate limit and timeouts come from this group.</p>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary">{{ icon('plus') }} Add mapping</button>
+          </div>
+        </form>
+      {% endif %}
+    </div>
+
+    <div class="card card-wide">
+      <h2>Check an account</h2>
+      <p class="hint">
+        Shows the groups the directory reports for someone and which mapping
+        would win — without needing their password.
+      </p>
+      <form method="post" action="{{ url_for('directory_groups_test') }}">
+        <div class="field">
+          <label for="testuser">{{ icon('users') }} Username</label>
+          <input type="text" id="testuser" name="username" autocomplete="off"
+                 placeholder="e.g. someone.name">
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn">{{ icon('search') }} Check</button>
+        </div>
+      </form>
+    </div>
+  </div>
+{% endblock %}

@@ -10,8 +10,10 @@ enough for name lookups and enumeration. Everything degrades gracefully: if
 winbind is missing, stopped, or the DC is unreachable, `available()` is False
 and the UI falls back to a free-text field.
 """
+import grp
 import json
 import os
+import pwd
 import subprocess
 import threading
 import time
@@ -22,6 +24,19 @@ CACHE_TTL = 60  # the directory changes rarely and page loads are frequent
 
 _lock = threading.Lock()
 _cache = {"users": None, "at": 0.0}
+_group_cache = {"groups": None, "at": 0.0}
+
+# Windows ships these; none of them is a bandwidth policy
+_BUILTIN_GROUPS = {
+    "domain computers", "domain controllers", "schema admins",
+    "enterprise admins", "cert publishers", "domain admins",
+    "domain guests", "group policy creator owners",
+    "ras and ias servers", "allowed rodc password replication group",
+    "denied rodc password replication group",
+    "read-only domain controllers", "enterprise read-only domain controllers",
+    "dnsadmins", "dnsupdateproxy", "protected users", "key admins",
+    "enterprise key admins", "cloneable domain controllers",
+}
 
 
 def _run(args):
@@ -84,6 +99,63 @@ def exists(username):
         return False
     out = _run(["-n", username])
     return bool(out) and "SID_USER" in out
+
+
+def list_groups(force=False):
+    """Domain group names, lowercased as winbind reports them.
+
+    Built-in Windows groups are filtered out: nobody maps "domain computers"
+    to a bandwidth policy, and hiding them keeps the picker usable.
+    """
+    with _lock:
+        fresh = time.time() - _group_cache["at"] < CACHE_TTL
+        if _group_cache["groups"] is not None and fresh and not force:
+            return _group_cache["groups"]
+
+    out = _run(["-g"])
+    groups = []
+    if out:
+        groups = sorted(
+            line.strip() for line in out.splitlines()
+            if line.strip() and line.strip().lower() not in _BUILTIN_GROUPS
+        )
+
+    with _lock:
+        _group_cache["groups"] = groups
+        _group_cache["at"] = time.time()
+    return groups
+
+
+def user_groups(username):
+    """The AD groups one user belongs to, by name.
+
+    Uses NSS directly rather than parsing `id -Gn`. That command separates
+    names with spaces, and AD group names routinely contain them -- "domain
+    users" would come back as two groups called "domain" and "users", so any
+    mapping to such a group could never match. getgrouplist returns gids, which
+    resolve unambiguously.
+
+    winbind caches the lookup, which matters: deploy/ad-policy does the same
+    thing on every authentication.
+    """
+    if not username:
+        return []
+    try:
+        entry = pwd.getpwnam(username)
+    except KeyError:
+        return []
+    try:
+        gids = os.getgrouplist(username, entry.pw_gid)
+    except OSError:
+        return []
+
+    names = []
+    for gid in gids:
+        try:
+            names.append(grp.getgrgid(gid).gr_name)
+        except KeyError:
+            continue  # a gid winbind knows but cannot name
+    return names
 
 
 # --- privileged operations ---------------------------------------------------

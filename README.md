@@ -118,7 +118,14 @@ The manual equivalent of everything the Directory page does, including the
 `rlm_mschap` rule that keeps local users working once AD is wired in, is in
 [docs/manual-install.md](docs/manual-install.md#3-samba-and-kerberos--only-for-active-directory).
 
-Once joined, **Users → Map directory account** assigns a domain account to a
+Once joined there are two ways to give domain accounts policy.
+
+**Directory → Directory groups** maps a whole AD group to a RADIUS group. At
+login FreeRADIUS asks the directory which groups the account is in and applies
+the first mapping that matches, so the order of the list decides the outcome
+for anyone in more than one. Nothing to maintain per person.
+
+**Users → Map directory account** assigns one domain account to a
 group. The account keeps its password in the directory; the rows written here
 only tell FreeRADIUS what to reply with.
 
@@ -155,6 +162,26 @@ their own row. One caveat worth knowing: the plaintext password reaches
 other users on the RADIUS server. `rlm_exec` cannot feed a child on stdin. If
 that matters, use `rlm_ldap` with a bind instead, at the cost of maintaining a
 service account.
+
+### Which policy wins
+
+For a directory account, in order:
+
+1. a per-user rate limit override, set on the user's page
+2. a RADIUS group assigned to that account individually
+3. a RADIUS group mapped from one of its AD groups
+4. nothing — the account authenticates but gets no limits
+
+Anything configured by hand therefore beats the AD group mapping, which is
+what you want when one person needs an exception.
+
+A note on naming: it is tempting to encode the limit in the AD group name, e.g.
+a group called `20M-20M`. Two things make that a poor trade. `/` is not legal
+in an AD group name, so the MikroTik `rx/tx` form cannot be used directly; and
+an asymmetric name like `10M-50M` does not say which half is upload, which is
+exactly the ambiguity the download/upload picker exists to remove. Mapping to a
+named RADIUS group keeps one validated source of truth and also carries the
+timeouts and simultaneous-use limit, which a name cannot.
 
 ## How local and directory accounts differ
 
