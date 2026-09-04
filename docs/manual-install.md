@@ -370,7 +370,61 @@ reached the DC and the account exists. `NT_STATUS_NO_SUCH_USER` means the
 username is wrong. Anything mentioning the pipe means 3.4's group membership
 or the restart is missing.
 
-### 3.5 Which authentication methods work against AD
+### 3.5 PAP against the directory
+
+The wiring above covers MS-CHAP only. A PAP request carries the plaintext
+password, but `rlm_pap` still needs a known-good password to compare it
+against, so a directory account fails with "No Auth-Type found" before the
+directory is consulted. A MikroTik hotspot in `http-pap` mode lands exactly
+here.
+
+Point the stock exec module at winbind in
+`/etc/freeradius/3.0/mods-available/ntlm_auth`:
+
+```
+    program = "/usr/bin/ntlm_auth --request-nt-key --domain=EXAMPLE --username=%{%{Stripped-User-Name}:-%{User-Name}} --password=%{User-Password}"
+```
+
+Add an `Auth-Type` block inside `authenticate {}` in both virtual servers:
+
+```
+    Auth-Type ntlm_auth {
+        ntlm_auth
+    }
+```
+
+And select it in `authorize {}`, extending the rule from 3.4 so it only
+applies to accounts with no local password:
+
+```
+    if (&control:Cleartext-Password || &control:NT-Password) {
+        update control {
+            &MS-CHAP-Use-NTLM-Auth := No
+        }
+    }
+    elsif (&User-Password) {
+        update control {
+            &Auth-Type := ntlm_auth
+        }
+    }
+```
+
+The plaintext reaches `ntlm_auth` in argv, so it is briefly visible in `ps`.
+`rlm_exec` cannot feed a child on stdin; use `rlm_ldap` with a bind if that is
+unacceptable in your environment.
+
+**Check** — a wrong password must be rejected by the directory rather than
+failing earlier:
+
+```
+radtest someaduser DeliberatelyWrong 127.0.0.1 0 testing123
+```
+
+In `freeradius -X` you should see `Found Auth-Type = ntlm_auth` followed by
+`NT_STATUS_WRONG_PASSWORD`. Seeing `No Auth-Type found` instead means the
+`authorize` rule did not match.
+
+### 3.6 Which authentication methods work against AD
 
 | Client uses | Local users | AD users |
 |---|---|---|

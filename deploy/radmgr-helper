@@ -32,6 +32,8 @@ import time
 KRB5 = "/etc/krb5.conf"
 SMB = "/etc/samba/smb.conf"
 MSCHAP = "/etc/freeradius/3.0/mods-available/mschap"
+NTLM_MOD = "/etc/freeradius/3.0/mods-available/ntlm_auth"
+SITES = "/etc/freeradius/3.0/sites-available"
 BACKUP_DIR = "/var/backups/freeradius-manager"
 
 # Deliberately tight. A realm or account name that does not match is rejected
@@ -270,6 +272,7 @@ def cmd_join():
     run(["systemctl", "enable", "--now", "winbind"], timeout=45)
     # freeradius must restart to pick up winbindd_priv group membership
     configure_ntlm_auth(workgroup.upper())
+    configure_pap(workgroup.upper())
     run(["systemctl", "restart", "freeradius"], timeout=45)
 
     code, out = run(["net", "ads", "testjoin"], timeout=25)
@@ -341,10 +344,106 @@ def configure_ntlm_auth(workgroup):
     return True
 
 
+def configure_pap(workgroup):
+    """Let directory accounts authenticate over PAP as well as MS-CHAP.
+
+    rlm_mschap's ntlm_auth covers MS-CHAP only. A PAP request does carry the
+    plaintext password, but rlm_pap still needs a "known good" password to
+    compare it against, and a directory account has none -- so PAP for those
+    accounts dies with "No Auth-Type found" before the directory is ever
+    consulted. MikroTik hotspots in http-pap mode land exactly here, so without
+    this a domain account cannot use a hotspot at all.
+
+    Local users are untouched: rlm_pap still matches them against their own row.
+    """
+    changed = False
+
+    # Point the stock exec module at winbind.
+    #
+    # Note the plaintext password reaches ntlm_auth as a command-line argument,
+    # so it is briefly visible in `ps` to other users on this host. rlm_exec
+    # cannot feed a child on stdin. If that matters in your environment, use
+    # rlm_ldap with a bind instead, at the cost of a service account.
+    if os.path.exists(NTLM_MOD):
+        text = open(NTLM_MOD).read()
+        if "/usr/bin/ntlm_auth" not in text:
+            program = (
+                '\tprogram = "/usr/bin/ntlm_auth --request-nt-key '
+                "--domain=" + workgroup + " "
+                "--username=%{%{Stripped-User-Name}:-%{User-Name}} "
+                '--password=%{User-Password}"'
+            )
+            new_text, n = re.subn(
+                r'^\tprogram = "/path/to/ntlm_auth.*$', program, text,
+                count=1, flags=re.M,
+            )
+            if n:
+                backup(NTLM_MOD)
+                open(NTLM_MOD, "w").write(new_text)
+                changed = True
+
+    AUTH_BLOCK = (
+        "\n"
+        "\t#  Validate a plaintext password against the directory. Selected\n"
+        "\t#  from authorize{} only for accounts with no local password, so\n"
+        "\t#  local users never reach it.\n"
+        "\tAuth-Type ntlm_auth {\n"
+        "\t\tntlm_auth\n"
+        "\t}\n"
+    )
+    MARKER = "\t\t\t&MS-CHAP-Use-NTLM-Auth := No\n\t\t}\n\t}\n"
+    FALLBACK = (
+        "\telsif (&User-Password) {\n"
+        "\t\t#  No local password, but the client sent a plaintext one (PAP).\n"
+        "\t\t#  rlm_pap cannot help without a known-good password, so hand the\n"
+        "\t\t#  plaintext to the directory instead of rejecting outright.\n"
+        "\t\tupdate control {\n"
+        "\t\t\t&Auth-Type := ntlm_auth\n"
+        "\t\t}\n"
+        "\t}\n"
+    )
+
+    for site in ("default", "inner-tunnel"):
+        path = os.path.join(SITES, site)
+        if not os.path.exists(path):
+            continue
+        text = open(path).read()
+        original = text
+
+        if "Auth-Type ntlm_auth" not in text:
+            lines = text.splitlines(True)
+            start = None
+            for i, line in enumerate(lines):
+                if line.startswith("authenticate {"):
+                    start = i
+                    break
+            if start is not None:
+                depth = 0
+                end = len(lines) - 1
+                for i in range(start, len(lines)):
+                    depth += lines[i].count("{") - lines[i].count("}")
+                    if depth == 0:
+                        end = i
+                        break
+                lines.insert(end, AUTH_BLOCK)
+                text = "".join(lines)
+
+        if MARKER in text and "Auth-Type := ntlm_auth" not in text:
+            text = text.replace(MARKER, MARKER + FALLBACK, 1)
+
+        if text != original:
+            backup(path)
+            open(path, "w").write(text)
+            changed = True
+
+    return changed
+
+
 def cmd_configure():
     payload = read_payload()
     workgroup = need(payload, "workgroup", RE_WORKGROUP, "NetBIOS domain")
     changed = configure_ntlm_auth(workgroup.upper())
+    changed = configure_pap(workgroup.upper()) or changed
     code, out = run(["freeradius", "-XC"], timeout=45)
     if code != 0:
         fail("FreeRADIUS rejected the configuration", detail=out.strip()[-400:])

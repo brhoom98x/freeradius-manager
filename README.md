@@ -135,6 +135,15 @@ authenticated by AD, switch the hotspot to PAP:
 Otherwise keep hotspot users as local accounts — they work fine alongside
 domain accounts, and the UI shows both.
 
+PAP against the directory goes through FreeRADIUS's `ntlm_auth` exec module,
+which the Directory page wires up when you join. It is selected only for
+accounts that have no local password, so local users keep matching against
+their own row. One caveat worth knowing: the plaintext password reaches
+`ntlm_auth` as a command-line argument, so it is briefly visible in `ps` to
+other users on the RADIUS server. `rlm_exec` cannot feed a child on stdin. If
+that matters, use `rlm_ldap` with a bind instead, at the cost of maintaining a
+service account.
+
 ## How local and directory accounts differ
 
 An account is **local** when the database holds a password for it, and
