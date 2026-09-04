@@ -1,0 +1,119 @@
+{% from "_icons.html" import icon %}
+
+{# Every control here works with JavaScript switched off: the Custom… fields are
+   plain inputs that are simply always visible, and fields.js only hides them
+   when the matching select is not on "custom". The server reads the same names
+   either way. #}
+
+{# One side of the rate picker: a preset dropdown plus a custom number+unit. #}
+{% macro rate_side(prefix, side, label, icon_name, parts) %}
+  {%- set num = parts[0] if parts else '' -%}
+  {%- set unit = parts[1] if parts else 'M' -%}
+  {%- set preset = (num ~ unit) if num else '' -%}
+  {%- set is_preset = preset in rate_presets -%}
+  <div class="rate-side">
+    <label for="{{ prefix }}_{{ side }}">{{ icon(icon_name) }} {{ label }}</label>
+    <select id="{{ prefix }}_{{ side }}" name="{{ prefix }}_{{ side }}"
+            class="js-preset" data-custom="{{ prefix }}_{{ side }}_custom">
+      <option value="" {{ 'selected' if not num else '' }}>Unlimited</option>
+      {% for p in rate_presets %}
+        <option value="{{ p }}" {{ 'selected' if is_preset and p == preset else '' }}>{{ p }}bit/s</option>
+      {% endfor %}
+      <option value="custom" {{ 'selected' if num and not is_preset else '' }}>Custom…</option>
+    </select>
+    <div class="custom-row" id="{{ prefix }}_{{ side }}_custom">
+      <input type="number" min="1" step="1" name="{{ prefix }}_{{ side }}_num"
+             value="{{ num if num and not is_preset else '' }}" placeholder="Amount"
+             aria-label="{{ label }} amount">
+      <select name="{{ prefix }}_{{ side }}_unit" aria-label="{{ label }} unit">
+        {% for value, text in rate_units %}
+          <option value="{{ value }}" {{ 'selected' if value == unit else '' }}>{{ text }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
+{% endmacro %}
+
+{# Full rate-limit control. `value` is the stored Mikrotik-Rate-Limit string. #}
+{% macro rate_picker(value, prefix='rate', help='') %}
+  {%- set parts = value | split_rate -%}
+  <fieldset class="rate-picker" data-mode="{{ 'simple' if parts else 'advanced' }}">
+    <legend>{{ icon('activity') }} Rate limit</legend>
+    <input type="hidden" name="{{ prefix }}_mode" value="{{ 'simple' if parts else 'advanced' }}"
+           class="js-mode">
+
+    <div class="rate-simple">
+      <div class="rate-sides">
+        {{ rate_side(prefix, 'down', 'Download', 'download', parts.down if parts else None) }}
+        {{ rate_side(prefix, 'up', 'Upload', 'upload', parts.up if parts else None) }}
+      </div>
+      <p class="hint">
+        {% if help %}{{ help }} {% endif %}
+        Leave one side blank to match the other. Stored as
+        <code>Mikrotik-Rate-Limit</code> in MikroTik's <code>rx/tx</code> order,
+        where rx is what the client uploads.
+      </p>
+      <button type="button" class="linkish js-to-advanced">Enter a raw value instead</button>
+    </div>
+
+    <div class="rate-advanced">
+      <label for="{{ prefix }}_raw">Raw value</label>
+      <input type="text" id="{{ prefix }}_raw" name="{{ prefix }}_raw" value="{{ value or '' }}"
+             placeholder="e.g. 10M/10M 20M/20M 12M/12M 8">
+      <p class="hint">
+        Full MikroTik syntax, including burst parameters. This value cannot be
+        expressed with the dropdowns above.
+      </p>
+      <button type="button" class="linkish js-to-simple">Use the dropdowns instead</button>
+    </div>
+  </fieldset>
+{% endmacro %}
+
+{# A preset dropdown with a Custom… escape hatch, for durations and counts. #}
+{% macro preset_field(name, label, value, presets, unit_label, icon_name, help='') %}
+  {%- set is_preset = value and presets | selectattr('0', 'equalto', value) | list -%}
+  <div class="field">
+    <label for="{{ name }}">{{ icon(icon_name) }} {{ label }}</label>
+    <select id="{{ name }}" name="{{ name }}" class="js-preset" data-custom="{{ name }}_custom">
+      <option value="" {{ 'selected' if not value else '' }}>Unlimited</option>
+      {% for pvalue, ptext in presets %}
+        <option value="{{ pvalue }}" {{ 'selected' if is_preset and pvalue == value else '' }}>{{ ptext }}</option>
+      {% endfor %}
+      <option value="custom" {{ 'selected' if value and not is_preset else '' }}>Custom…</option>
+    </select>
+    <div class="custom-row" id="{{ name }}_custom">
+      <input type="number" min="1" step="1" name="{{ name }}_num"
+             value="{{ value if value and not is_preset else '' }}"
+             placeholder="{{ unit_label }}" aria-label="{{ label }} in {{ unit_label }}">
+      <span class="unit-suffix">{{ unit_label }}</span>
+    </div>
+    {% if help %}<p class="hint">{{ help }}</p>{% endif %}
+  </div>
+{% endmacro %}
+
+{# Read-only display of a rate limit, split into download and upload. #}
+{% macro rate_cell(value, empty_text='—') %}
+  {%- set parts = value | split_rate -%}
+  {% if not value %}
+    <span class="muted">{{ empty_text }}</span>
+  {% elif parts %}
+    <span class="rate-cell">
+      <span title="Download">{{ icon('download', 12) }}{{ parts.down[0] }}{{ parts.down[1] }}</span>
+      <span title="Upload">{{ icon('upload', 12) }}{{ parts.up[0] }}{{ parts.up[1] }}</span>
+    </span>
+  {% else %}
+    {# carries burst parameters, so show it verbatim rather than mangling it #}
+    <code title="Includes burst parameters">{{ value }}</code>
+  {% endif %}
+{% endmacro %}
+
+{# Renders whichever control a GROUP_ATTRS entry asks for. #}
+{% macro attr_field(spec, value) %}
+  {% if spec.widget == 'rate' %}
+    {{ rate_picker(value, 'rate', spec.help) }}
+  {% elif spec.widget == 'duration' %}
+    {{ preset_field(spec.key, spec.label, value, duration_presets, 'seconds', 'clock', spec.help) }}
+  {% else %}
+    {{ preset_field(spec.key, spec.label, value, count_presets, 'devices', 'users', spec.help) }}
+  {% endif %}
+{% endmacro %}

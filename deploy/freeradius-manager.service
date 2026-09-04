@@ -1,0 +1,52 @@
+[Unit]
+Description=FreeRADIUS Manager web UI
+Documentation=https://github.com/__GITHUB_OWNER__/freeradius-manager
+# The UI is useless without the database, and MariaDB needs to be up first.
+After=network-online.target mariadb.service
+Wants=network-online.target
+Requires=mariadb.service
+
+[Service]
+Type=exec
+User=__SERVICE_USER__
+Group=__SERVICE_USER__
+WorkingDirectory=__APP_DIR__
+# Config (DB credentials, SECRET_KEY, admin login, TLS paths) is read from
+# .env by python-dotenv.
+ExecStart=__APP_DIR__/venv/bin/gunicorn \
+    --workers 2 \
+    --bind __BIND__ \
+    __TLS_ARGS__ \
+    --access-logfile - \
+    --error-logfile - \
+    --capture-output \
+    app:app
+Restart=on-failure
+RestartSec=3s
+
+# Hardening. Two directives are deliberately NOT set to their strictest value,
+# because the Directory page joins this host to Active Directory:
+#
+#   NoNewPrivileges  must stay false, or sudo cannot start the privileged
+#                    helper at all ("the no new privileges flag is set").
+#   ProtectSystem    is `full` rather than `strict`, because the helper writes
+#                    /etc/krb5.conf, /etc/samba/smb.conf and the FreeRADIUS
+#                    mschap module. `full` still keeps /usr and /boot read-only.
+#
+# The escalation itself stays narrow: one sudoers entry naming one root-owned
+# script that the service account cannot modify, which validates every value it
+# is given. If you do not use the domain-join feature, set NoNewPrivileges=true
+# and ProtectSystem=strict — everything else in the app keeps working.
+NoNewPrivileges=false
+ProtectSystem=full
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictSUIDSGID=false
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

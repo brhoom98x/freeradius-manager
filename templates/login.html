@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% from "_icons.html" import icon %}
+{% block title %}Sign in — RADIUS Admin{% endblock %}
+{% block content %}
+  <div class="card-wrap">
+    <div class="card">
+      <h1>{{ icon('shield', 20) }} Sign in</h1>
+      <p class="lead">RADIUS user management</p>
+      <form method="post">
+        <div class="field">
+          <label for="username">{{ icon('users') }} Username</label>
+          <input type="text" id="username" name="username" required autofocus autocomplete="username">
+        </div>
+        <div class="field">
+          <label for="password">{{ icon('lock') }} Password</label>
+          <input type="password" id="password" name="password" required autocomplete="current-password">
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">{{ icon('log-out') }} Sign in</button>
+        </div>
+      </form>
+    </div>
+  </div>
+{% endblock %}

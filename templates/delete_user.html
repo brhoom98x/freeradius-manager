@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% from "_icons.html" import icon %}
+{% block title %}Delete user — RADIUS Admin{% endblock %}
+{% block content %}
+  <div class="card-wrap">
+    <div class="card confirm-box">
+      <h1>{{ icon('trash', 20) }} {{ 'Remove mapping' if source == 'directory' else 'Delete user' }}</h1>
+      {% if source == 'directory' %}
+        <p>This removes the group and policy rows for <strong>{{ username }}</strong>.
+           The account itself lives in Active Directory and is <strong>not</strong>
+           touched — it will simply authenticate with no group and no rate limit
+           until it is mapped again.</p>
+      {% else %}
+        <p>This removes <strong>{{ username }}</strong> from <code>radcheck</code>,
+           <code>radreply</code> and <code>radusergroup</code>. Accounting history in
+           <code>radacct</code> is kept.</p>
+      {% endif %}
+      <form method="post">
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary btn-danger">{{ icon('trash') }} {{ 'Remove mapping' if source == 'directory' else 'Delete user' }}</button>
+          <a href="{{ url_for('users') }}">Cancel</a>
+        </div>
+      </form>
+    </div>
+  </div>
+{% endblock %}

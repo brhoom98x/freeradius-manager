@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% from "_icons.html" import icon %}
+{% from "_fields.html" import rate_picker %}
+{% block title %}Map directory account — RADIUS Admin{% endblock %}
+{% block content %}
+  <div class="card-wrap">
+    <div class="card card-wide">
+      <h1>{{ icon('shield', 20) }} Map directory account</h1>
+      <p class="lead">
+        Give an Active Directory account a group and a rate limit. The password
+        stays in the directory — nothing is stored here, and FreeRADIUS checks it
+        through <code>ntlm_auth</code> at login.
+      </p>
+
+      {% if not ad_up %}
+        <div class="flash flash-error">
+          {{ icon('alert') }}
+          The directory is not answering, so accounts cannot be listed or
+          checked. You can still type a username, but a typo will produce a
+          mapping that never matches a login.
+        </div>
+      {% endif %}
+
+      <form method="post">
+        <div class="field">
+          <label for="username">{{ icon('users') }} Directory account</label>
+          {% if ad_users %}
+            <input type="text" id="username" name="username" list="ad-accounts"
+                   value="{{ username or '' }}" required autofocus autocomplete="off"
+                   placeholder="Start typing a name">
+            <datalist id="ad-accounts">
+              {% for u in ad_users %}<option value="{{ u }}"></option>{% endfor %}
+            </datalist>
+            <p class="hint">
+              {{ ad_users | length }} unmapped account{{ '' if ad_users | length == 1 else 's' }}
+              available. The name is checked against the directory before saving.
+            </p>
+          {% else %}
+            <input type="text" id="username" name="username" value="{{ username or '' }}"
+                   required autofocus autocomplete="off">
+            <p class="hint">
+              {% if ad_up %}
+                Every directory account is already mapped or has a local password.
+              {% else %}
+                Type the account name exactly as it appears in the directory.
+              {% endif %}
+            </p>
+          {% endif %}
+        </div>
+
+        <div class="field">
+          <label for="groupname">{{ icon('layers') }} Group</label>
+          <select id="groupname" name="groupname">
+            <option value="">— no group —</option>
+            {% for group in groups %}
+              <option value="{{ group }}">{{ group }}</option>
+            {% endfor %}
+          </select>
+          <p class="hint">Where the account's policy comes from.</p>
+        </div>
+
+        {{ rate_picker('', 'rate',
+                       'Optional override for this account only. Leave both sides
+                        on Unlimited to use the group\'s limit.') }}
+
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">{{ icon('plus') }} Map account</button>
+          <a href="{{ url_for('users') }}">Cancel</a>
+        </div>
+      </form>
+    </div>
+  </div>
+{% endblock %}

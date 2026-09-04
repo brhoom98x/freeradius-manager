@@ -1,0 +1,76 @@
+{% from "_icons.html" import icon %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}RADIUS Admin{% endblock %}</title>
+  {# SVG first for a crisp icon at any size; the PNG covers browsers that
+     ignore SVG favicons. Both are generated from the same geometry — see
+     deploy/make_favicon.py. #}
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+  <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon.png') }}">
+  {# Apply the stored theme before first paint, otherwise a dark-mode user sees
+     a white flash on every navigation. #}
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("theme");
+        if (t === "light" || t === "dark") {
+          document.documentElement.setAttribute("data-theme", t);
+        }
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="{{ url_for('index') }}">{{ icon('shield', 18) }} RADIUS Admin</a>
+      {% if current_admin %}
+        <nav>
+          <a href="{{ url_for('index') }}" class="{{ 'active' if request.endpoint == 'index' else '' }}">{{ icon('grid') }} Overview</a>
+          <a href="{{ url_for('users') }}" class="{{ 'active' if request.endpoint in ('users', 'add_user', 'edit_user', 'change_password', 'delete_user') else '' }}">{{ icon('users') }} Users</a>
+          <a href="{{ url_for('groups') }}" class="{{ 'active' if request.endpoint in ('groups', 'add_group', 'edit_group', 'delete_group') else '' }}">{{ icon('layers') }} Groups</a>
+          <a href="{{ url_for('sessions_view') }}" class="{{ 'active' if request.endpoint == 'sessions_view' else '' }}">{{ icon('activity') }} Sessions</a>
+          <a href="{{ url_for('clients') }}" class="{{ 'active' if request.endpoint == 'clients' else '' }}">{{ icon('server') }} Clients</a>
+          <a href="{{ url_for('directory') }}" class="{{ 'active' if request.endpoint.startswith('directory') else '' }}">{{ icon('shield') }} Directory</a>
+          <a href="{{ url_for('radacct') }}" class="{{ 'active' if request.endpoint == 'radacct' else '' }}">{{ icon('file-text') }} Accounting</a>
+          <a href="{{ url_for('radpostauth') }}" class="{{ 'active' if request.endpoint == 'radpostauth' else '' }}">{{ icon('key') }} Post-Auth</a>
+        </nav>
+      {% endif %}
+
+      <div class="theme-switch" role="group" aria-label="Colour theme">
+        <button type="button" data-theme-btn="system" title="Match system setting" aria-pressed="false">{{ icon('monitor') }}</button>
+        <button type="button" data-theme-btn="light" title="Light" aria-pressed="false">{{ icon('sun') }}</button>
+        <button type="button" data-theme-btn="dark" title="Dark" aria-pressed="false">{{ icon('moon') }}</button>
+      </div>
+
+      {% if current_admin %}
+        <form class="signout" method="post" action="{{ url_for('logout') }}">
+          <span class="muted">{{ current_admin }}</span>
+          <button type="submit" class="btn btn-sm">{{ icon('log-out') }} Sign out</button>
+        </form>
+      {% endif %}
+    </div>
+  </header>
+
+  <main class="container">
+    {% with flashes = get_flashed_messages(with_categories=true) %}
+      {% for category, msg in flashes %}
+        <div class="flash flash-{{ category }}">
+          {{ icon('check' if category == 'success' else 'alert') }} {{ msg }}
+        </div>
+      {% endfor %}
+    {% endwith %}
+    {% if error %}
+      <div class="flash flash-error">{{ icon('alert') }} {{ error }}</div>
+    {% endif %}
+
+    {% block content %}{% endblock %}
+  </main>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

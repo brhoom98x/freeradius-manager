@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% from "_icons.html" import icon %}
+{% block title %}Add User — RADIUS Admin{% endblock %}
+{% block content %}
+  <div class="card-wrap">
+    <div class="card">
+      <h1>{{ icon('user-plus', 20) }} Add user</h1>
+      <form method="post">
+        <div class="field">
+          <label for="username">{{ icon('users') }} Username</label>
+          <input type="text" id="username" name="username" value="{{ username or '' }}" required autofocus>
+        </div>
+        <div class="field">
+          <label for="password">{{ icon('key') }} Password</label>
+          <input type="password" id="password" name="password" required>
+        </div>
+        <div class="field">
+          <label for="groupname">{{ icon('layers') }} Group</label>
+          <select id="groupname" name="groupname">
+            <option value="">&mdash; no group &mdash;</option>
+            {% for group in groups %}
+              <option value="{{ group }}">{{ group }}</option>
+            {% endfor %}
+          </select>
+          <p class="hint">The group supplies the rate limit. Set a per-user override afterwards if needed.</p>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">{{ icon('plus') }} Add user</button>
+          <a href="{{ url_for('users') }}">Cancel</a>
+        </div>
+      </form>
+    </div>
+  </div>
+{% endblock %}

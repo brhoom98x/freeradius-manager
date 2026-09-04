@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="RADIUS Admin">
+  <!-- Solid tile rather than a bare glyph: the tab strip is light in one theme
+       and dark in the other, and a filled shape reads at 16px in both. -->
+  <rect width="24" height="24" rx="5" fill="#2f5fd8"/>
+  <path fill="#fff"
+        d="M12 4 5.7 6.4v5.5c0 3.4 1.9 6.5 6.3 8.6 4.4-2.1 6.3-5.2 6.3-8.6V6.4Z"/>
+</svg>

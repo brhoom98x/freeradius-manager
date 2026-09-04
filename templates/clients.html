@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Clients — RADIUS Admin{% endblock %}
+{% block content %}
+  <div class="page-header">
+    <h1>RADIUS clients</h1>
+    <span class="muted">read-only</span>
+  </div>
+
+  {% if not error and not rows %}
+    <p class="empty">No NAS entries. Clients may be defined in <code>clients.conf</code> instead of the <code>nas</code> table.</p>
+  {% elif not error %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>NAS</th>
+            <th>Short name</th>
+            <th>Type</th>
+            <th>Ports</th>
+            <th>Server</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+            <tr>
+              <td><code>{{ r.nasname }}</code></td>
+              <td>{{ r.shortname or '—' }}</td>
+              <td>{{ r.type or '—' }}</td>
+              <td>{{ r.ports or '—' }}</td>
+              <td>{{ r.server or '—' }}</td>
+              <td>{{ r.description or '—' }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+{% endblock %}

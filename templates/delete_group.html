@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% from "_icons.html" import icon %}
+{% block title %}Delete group — RADIUS Admin{% endblock %}
+{% block content %}
+  <div class="card-wrap">
+    <div class="card confirm-box">
+      <h1>{{ icon('trash', 20) }} Delete group</h1>
+      <p>This removes every policy row for <strong>{{ groupname }}</strong> from
+         <code>radgroupreply</code> and <code>radgroupcheck</code>. Users are not
+         deleted, but a group with members cannot be removed.</p>
+      <form method="post">
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary btn-danger">{{ icon('trash') }} Delete group</button>
+          <a href="{{ url_for('groups') }}">Cancel</a>
+        </div>
+      </form>
+    </div>
+  </div>
+{% endblock %}

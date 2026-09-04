@@ -1,0 +1,4 @@
+# Shell scripts, sudoers files and systemd units break on CRLF. Normalise
+# everything text to LF regardless of the contributor's platform.
+* text=auto eol=lf
+*.png binary

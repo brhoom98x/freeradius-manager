@@ -1,0 +1,17 @@
+# Installed to /etc/sudoers.d/freeradius-manager by install.sh.
+#
+# The web app runs unprivileged and may run exactly one program as root: the
+# helper that joins the directory and rewrites the Kerberos, Samba and
+# FreeRADIUS configuration. The helper itself validates every value it is given
+# and accepts only the verbs status, join, leave and configure.
+#
+# Two things make this narrow rather than "sudo for the app":
+#   * the path is absolute and the helper must be root-owned and not writable
+#     by the service account, so the app cannot rewrite what it is allowed to
+#     run (install.sh enforces this and refuses otherwise);
+#   * no wildcard is used, so no other program can be substituted.
+#
+# NOPASSWD is required because there is no terminal to prompt at. No
+# `Defaults !requiretty` line: sudo dropped that setting, and including it makes
+# the whole file invalid on current releases.
+__SERVICE_USER__ ALL=(root) NOPASSWD: __APP_DIR__/deploy/radmgr-helper

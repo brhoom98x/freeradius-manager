@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% from "_icons.html" import icon %}
+{% from "_fields.html" import rate_cell %}
+{% block title %}Users — RADIUS Admin{% endblock %}
+{% block content %}
+  <div class="page-header">
+    <h1>Users</h1>
+    <div class="header-actions">
+      <a class="btn" href="{{ url_for('add_directory_user') }}">{{ icon('shield') }} Map directory account</a>
+      <a class="btn btn-primary" href="{{ url_for('add_user') }}">{{ icon('user-plus') }} Add user</a>
+    </div>
+  </div>
+
+  <form class="searchbar" method="get">
+    <input type="search" name="q" value="{{ q or '' }}" placeholder="Filter by username">
+    <select name="source" aria-label="Filter by source">
+      <option value="" {{ 'selected' if not source else '' }}>All sources</option>
+      <option value="local" {{ 'selected' if source == 'local' else '' }}>Local only</option>
+      <option value="directory" {{ 'selected' if source == 'directory' else '' }}>Directory only</option>
+    </select>
+    <button type="submit" class="btn">{{ icon('search') }} Search</button>
+    {% if q or source %}<a class="btn btn-sm" href="{{ url_for('users') }}">{{ icon('x') }} Clear</a>{% endif %}
+  </form>
+
+  {% if not error and not users %}
+    <p class="empty">{% if q or source %}No users match that filter.{% else %}No users found.{% endif %}</p>
+  {% elif not error %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Username</th>
+            <th>Source</th>
+            <th>Group</th>
+            <th>Rate limit</th>
+            <th>Status</th>
+            <th class="actions-col">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for user in users %}
+            <tr>
+              <td><a href="{{ url_for('edit_user', username=user.username) }}">{{ user.username }}</a></td>
+              <td>
+                {% if user.source == 'directory' %}
+                  <span class="pill pill-info" title="Password checked against Active Directory">{{ icon('shield', 12) }} directory</span>
+                {% else %}
+                  <span class="pill" title="Password stored locally in radcheck">{{ icon('key', 12) }} local</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if user.groupname %}
+                  <a class="badge" href="{{ url_for('edit_group', groupname=user.groupname) }}">{{ user.groupname }}</a>
+                {% else %}
+                  <span class="muted">—</span>
+                {% endif %}
+              </td>
+              <td>{{ rate_cell(user.rate_limit, 'from group') }}</td>
+              <td>
+                {% if user.disabled %}
+                  <span class="pill pill-bad">{{ icon('lock', 12) }} disabled</span>
+                {% else %}
+                  <span class="pill pill-ok">{{ icon('check', 12) }} enabled</span>
+                {% endif %}
+              </td>
+              <td class="actions">
+                <a class="btn btn-sm btn-icon" title="Edit" aria-label="Edit {{ user.username }}"
+                   href="{{ url_for('edit_user', username=user.username) }}">{{ icon('edit') }}</a>
+                {% if user.source == 'local' %}
+                  <a class="btn btn-sm btn-icon" title="Change password" aria-label="Change password for {{ user.username }}"
+                     href="{{ url_for('change_password', username=user.username) }}">{{ icon('key') }}</a>
+                {% endif %}
+                <form class="inline" method="post" action="{{ url_for('toggle_user', username=user.username) }}">
+                  <input type="hidden" name="enable" value="{{ '1' if user.disabled else '0' }}">
+                  <input type="hidden" name="back" value="{{ request.full_path }}">
+                  <button type="submit" class="btn btn-sm btn-icon"
+                          title="{{ 'Enable' if user.disabled else 'Disable' }}"
+                          aria-label="{{ 'Enable' if user.disabled else 'Disable' }} {{ user.username }}">
+                    {{ icon('unlock' if user.disabled else 'lock') }}
+                  </button>
+                </form>
+                <a class="btn btn-sm btn-icon btn-danger"
+                   title="{{ 'Remove mapping' if user.source == 'directory' else 'Delete' }}"
+                   aria-label="{{ 'Remove mapping for' if user.source == 'directory' else 'Delete' }} {{ user.username }}"
+                   href="{{ url_for('delete_user', username=user.username) }}">{{ icon('trash') }}</a>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+{% endblock %}

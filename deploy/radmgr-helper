@@ -1,0 +1,387 @@
+#!/usr/bin/env python3
+"""Privileged helper for the operations the web app cannot do as itself.
+
+The app runs unprivileged. Joining a domain writes /etc/krb5.conf and
+/etc/samba/smb.conf, talks to the KDC and restarts services, all of which need
+root. Rather than give the app broad sudo, it may run exactly this script, and
+this script accepts exactly the verbs below.
+
+    radmgr-helper status
+    radmgr-helper join      < payload.json
+    radmgr-helper leave     < payload.json
+    radmgr-helper configure < payload.json
+
+Design rules, because this runs as root on behalf of a web form:
+
+* Every value that reaches a command line is validated against a strict
+  pattern first. Nothing is passed through a shell -- subprocess is always
+  given an argument list.
+* The join password arrives on stdin as part of a JSON payload, never in argv
+  (where `ps` would show it) and never in a file. It is not logged, not echoed
+  back, and not written to disk.
+* Output is JSON on stdout so the caller never has to parse prose.
+"""
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+
+KRB5 = "/etc/krb5.conf"
+SMB = "/etc/samba/smb.conf"
+MSCHAP = "/etc/freeradius/3.0/mods-available/mschap"
+BACKUP_DIR = "/var/backups/freeradius-manager"
+
+# Deliberately tight. A realm or account name that does not match is rejected
+# rather than escaped, because there is no reason for one to contain anything
+# else and escaping is easier to get wrong.
+RE_REALM = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,252}[A-Za-z0-9]$")
+RE_WORKGROUP = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,14}$")
+RE_USER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@-]{0,63}$")
+RE_HOST = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$")
+
+TIMEOUT = 90
+
+
+def fail(message, **extra):
+    out = {"ok": False, "error": message}
+    out.update(extra)
+    print(json.dumps(out))
+    sys.exit(1)
+
+
+def ok(**fields):
+    out = {"ok": True}
+    out.update(fields)
+    print(json.dumps(out))
+    sys.exit(0)
+
+
+def run(args, stdin=None, timeout=TIMEOUT):
+    """Run a command with no shell. Returns (returncode, stdout+stderr)."""
+    try:
+        proc = subprocess.run(
+            args,
+            input=stdin,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return 124, "timed out after %ss" % timeout
+    except OSError as exc:
+        return 127, str(exc)
+    return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+
+
+def read_payload():
+    raw = sys.stdin.read()
+    if not raw.strip():
+        return {}
+    try:
+        return json.loads(raw)
+    except ValueError:
+        fail("payload is not valid JSON")
+
+
+def need(payload, key, pattern, label):
+    value = (payload.get(key) or "").strip()
+    if not value:
+        fail("%s is required" % label)
+    if not pattern.match(value):
+        fail("%s contains characters that are not allowed" % label)
+    return value
+
+
+def backup(path):
+    if not os.path.exists(path):
+        return None
+    os.makedirs(BACKUP_DIR, mode=0o700, exist_ok=True)
+    dest = os.path.join(
+        BACKUP_DIR,
+        "%s.%s" % (os.path.basename(path), time.strftime("%Y%m%d-%H%M%S")),
+    )
+    shutil.copy2(path, dest)
+    return dest
+
+
+# --- status ------------------------------------------------------------------
+
+
+def cmd_status():
+    state = {
+        "winbind_installed": bool(shutil.which("net") and shutil.which("wbinfo")),
+        "joined": False,
+        "realm": None,
+        "workgroup": None,
+        "dc": None,
+        "winbind_running": False,
+        "trust_ok": False,
+        "ntlm_auth_configured": False,
+        "detail": "",
+    }
+
+    if not state["winbind_installed"]:
+        state["detail"] = "samba/winbind is not installed"
+        ok(status=state)
+
+    code, out = run(["net", "ads", "testjoin"], timeout=20)
+    state["joined"] = code == 0
+    state["detail"] = out.strip()[:400]
+
+    if os.path.exists(SMB):
+        text = open(SMB, errors="replace").read()
+        for key, field in (("realm", "realm"), ("workgroup", "workgroup")):
+            match = re.search(r"^\s*%s\s*=\s*(\S+)" % key, text, re.M | re.I)
+            if match:
+                state[field] = match.group(1)
+
+    code, _ = run(["systemctl", "is-active", "--quiet", "winbind"], timeout=15)
+    state["winbind_running"] = code == 0
+
+    if state["joined"]:
+        code, _ = run(["wbinfo", "-t"], timeout=20)
+        state["trust_ok"] = code == 0
+        code, out = run(["net", "ads", "info"], timeout=20)
+        match = re.search(r"^LDAP server name:\s*(\S+)", out or "", re.M)
+        if match:
+            state["dc"] = match.group(1)
+
+    if os.path.exists(MSCHAP):
+        text = open(MSCHAP, errors="replace").read()
+        state["ntlm_auth_configured"] = bool(
+            re.search(r"^\s*ntlm_auth\s*=\s*\"/usr/bin/ntlm_auth", text, re.M)
+        )
+
+    ok(status=state)
+
+
+# --- join --------------------------------------------------------------------
+
+KRB5_TEMPLATE = """# Written by freeradius-manager. Edits here may be overwritten on rejoin.
+[libdefaults]
+    default_realm = {realm_upper}
+    dns_lookup_realm = false
+    dns_lookup_kdc = true
+    rdns = false
+    forwardable = true
+
+[realms]
+    {realm_upper} = {{
+        kdc = {kdc}
+        admin_server = {kdc}
+        default_domain = {realm_lower}
+    }}
+
+[domain_realm]
+    .{realm_lower} = {realm_upper}
+    {realm_lower} = {realm_upper}
+"""
+
+SMB_TEMPLATE = """# Written by freeradius-manager. Edits here may be overwritten on rejoin.
+#
+# This host is not a file server. Samba is present only so winbindd can offer
+# ntlm_auth, which is how FreeRADIUS validates MSCHAPv2 against the directory
+# without ever holding a user's password.
+[global]
+    workgroup = {workgroup}
+    realm = {realm_upper}
+    security = ADS
+    kerberos method = secrets and keytab
+
+    winbind use default domain = yes
+    winbind refresh tickets = yes
+    winbind offline logon = no
+    winbind enum users = no
+    winbind enum groups = no
+
+    idmap config * : backend = tdb
+    idmap config * : range = 3000-7999
+    idmap config {workgroup} : backend = rid
+    idmap config {workgroup} : range = 10000-999999
+
+    template shell = /usr/sbin/nologin
+    template homedir = /home/%U
+
+    disable netbios = yes
+    smb ports = 445
+    load printers = no
+    printing = bsd
+    printcap name = /dev/null
+    disable spoolss = yes
+
+    log level = 1
+    log file = /var/log/samba/log.%m
+    max log size = 1000
+"""
+
+
+def write_configs(realm, workgroup, kdc):
+    backups = {}
+    for path, text in (
+        (KRB5, KRB5_TEMPLATE.format(
+            realm_upper=realm.upper(), realm_lower=realm.lower(), kdc=kdc,
+        )),
+        (SMB, SMB_TEMPLATE.format(
+            workgroup=workgroup.upper(), realm_upper=realm.upper(),
+        )),
+    ):
+        backups[path] = backup(path)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as handle:
+            handle.write(text)
+        os.chmod(path, 0o644)
+    return backups
+
+
+def restore(backups):
+    for path, saved in (backups or {}).items():
+        if saved and os.path.exists(saved):
+            shutil.copy2(saved, path)
+
+
+def cmd_join():
+    payload = read_payload()
+    realm = need(payload, "realm", RE_REALM, "Realm")
+    workgroup = need(payload, "workgroup", RE_WORKGROUP, "NetBIOS domain")
+    username = need(payload, "username", RE_USER, "Username")
+    password = payload.get("password") or ""
+    if not password:
+        fail("Password is required")
+
+    kdc = (payload.get("dc") or "").strip() or realm.lower()
+    if not RE_HOST.match(kdc):
+        fail("Domain controller contains characters that are not allowed")
+
+    backups = write_configs(realm, workgroup, kdc)
+
+    # -U user%% with the password on stdin keeps it out of argv; net reads the
+    # password from stdin when given -U <user> and --stdin
+    code, out = run(
+        ["net", "ads", "join", "-U", username, "--stdin"],
+        stdin=password + "\n",
+    )
+    if code != 0:
+        restore(backups)
+        fail(_explain_join(out), detail=_scrub(out, password))
+
+    run(["systemctl", "enable", "--now", "winbind"], timeout=45)
+    # freeradius must restart to pick up winbindd_priv group membership
+    configure_ntlm_auth(workgroup.upper())
+    run(["systemctl", "restart", "freeradius"], timeout=45)
+
+    code, out = run(["net", "ads", "testjoin"], timeout=25)
+    if code != 0:
+        fail("Joined, but the join does not verify: %s" % out.strip()[:200])
+
+    ok(message="Joined %s" % realm.upper(), workgroup=workgroup.upper())
+
+
+def _scrub(text, secret):
+    """Never echo the password back, even inside an error from another tool."""
+    if secret and text:
+        text = text.replace(secret, "********")
+    return (text or "").strip()[:600]
+
+
+def _explain_join(out):
+    low = (out or "").lower()
+    if "preauthentication failed" in low or "logon failure" in low:
+        return "The directory rejected those credentials."
+    if "insufficient" in low or "access denied" in low:
+        return "That account is not allowed to join computers to the domain."
+    if "clock skew" in low:
+        return (
+            "Kerberos refused the join because this server's clock differs "
+            "from the domain controller by more than five minutes."
+        )
+    if "cannot resolve" in low or "couldn't find dc" in low or "no such" in low:
+        return (
+            "Could not find a domain controller for that realm. Check the "
+            "realm spelling, or give the controller's address explicitly."
+        )
+    return "Join failed: %s" % (out or "").strip()[:200]
+
+
+# --- configure ---------------------------------------------------------------
+
+
+def configure_ntlm_auth(workgroup):
+    """Point rlm_mschap at ntlm_auth for the joined domain.
+
+    The local-first rule in the virtual servers means SQL users keep
+    authenticating locally; only accounts with no local password reach here.
+    """
+    if not os.path.exists(MSCHAP):
+        return False
+    text = open(MSCHAP).read()
+    line = (
+        '\tntlm_auth = "/usr/bin/ntlm_auth --request-nt-key --allow-mschapv2 '
+        "--username=%{%{Stripped-User-Name}:-%{%{User-Name}:-None}} "
+        "--domain=" + workgroup + " "
+        "--challenge=%{%{mschap:Challenge}:-00} "
+        '--nt-response=%{%{mschap:NT-Response}:-00}"'
+    )
+    if re.search(r"^\s*ntlm_auth\s*=\s*\"/usr/bin/ntlm_auth", text, re.M):
+        new = re.sub(
+            r"^\s*ntlm_auth\s*=\s*\"/usr/bin/ntlm_auth.*$", line, text,
+            count=1, flags=re.M,
+        )
+    else:
+        new = re.sub(
+            r'^#\tntlm_auth = "/path/to/ntlm_auth.*$', line, text,
+            count=1, flags=re.M,
+        )
+        if new == text:
+            return False
+    backup(MSCHAP)
+    open(MSCHAP, "w").write(new)
+    return True
+
+
+def cmd_configure():
+    payload = read_payload()
+    workgroup = need(payload, "workgroup", RE_WORKGROUP, "NetBIOS domain")
+    changed = configure_ntlm_auth(workgroup.upper())
+    code, out = run(["freeradius", "-XC"], timeout=45)
+    if code != 0:
+        fail("FreeRADIUS rejected the configuration", detail=out.strip()[-400:])
+    run(["systemctl", "restart", "freeradius"], timeout=45)
+    ok(changed=changed)
+
+
+# --- leave -------------------------------------------------------------------
+
+
+def cmd_leave():
+    payload = read_payload()
+    username = need(payload, "username", RE_USER, "Username")
+    password = payload.get("password") or ""
+    if not password:
+        fail("Password is required")
+
+    code, out = run(
+        ["net", "ads", "leave", "-U", username, "--stdin"], stdin=password + "\n"
+    )
+    if code != 0:
+        fail("Leave failed: %s" % _scrub(out, password)[:200])
+
+    run(["systemctl", "disable", "--now", "winbind"], timeout=45)
+    ok(message="Left the domain")
+
+
+COMMANDS = {
+    "status": cmd_status,
+    "join": cmd_join,
+    "leave": cmd_leave,
+    "configure": cmd_configure,
+}
+
+if __name__ == "__main__":
+    if os.geteuid() != 0:
+        fail("must run as root")
+    if len(sys.argv) != 2 or sys.argv[1] not in COMMANDS:
+        fail("usage: radmgr-helper {%s}" % "|".join(sorted(COMMANDS)))
+    COMMANDS[sys.argv[1]]()

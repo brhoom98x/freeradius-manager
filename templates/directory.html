@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% from "_icons.html" import icon %}
+{% block title %}Directory — RADIUS Admin{% endblock %}
+{% block content %}
+  <div class="page-header">
+    <h1>Directory</h1>
+    {% if status and status.joined %}
+      <span class="pill pill-ok">{{ icon('check', 12) }} joined {{ status.realm or '' }}</span>
+    {% elif status %}
+      <span class="pill">{{ icon('alert', 12) }} not joined</span>
+    {% endif %}
+  </div>
+
+  {% if not secure %}
+    <div class="flash flash-error">
+      {{ icon('alert') }}
+      This page is not being served over HTTPS. A directory administrator
+      password submitted here would cross the network in the clear — finish the
+      join from the server's console instead, or reach this page over HTTPS.
+    </div>
+  {% endif %}
+
+  {% if status %}
+    <div class="table-wrap">
+      <table>
+        <tbody>
+          <tr><th>Samba / winbind</th>
+              <td>{{ 'installed' if status.winbind_installed else 'NOT installed' }}</td></tr>
+          <tr><th>Joined</th>
+              <td>{% if status.joined %}<span class="pill pill-ok">{{ icon('check', 12) }} yes</span>
+                  {% else %}<span class="pill pill-bad">{{ icon('x', 12) }} no</span>{% endif %}</td></tr>
+          <tr><th>Realm</th><td>{{ status.realm or '—' }}</td></tr>
+          <tr><th>NetBIOS domain</th><td>{{ status.workgroup or '—' }}</td></tr>
+          <tr><th>Domain controller</th><td>{{ status.dc or '—' }}</td></tr>
+          <tr><th>winbind running</th>
+              <td>{{ 'yes' if status.winbind_running else 'no' }}</td></tr>
+          <tr><th>Trust secret</th>
+              <td>{% if status.trust_ok %}<span class="pill pill-ok">{{ icon('check', 12) }} ok</span>
+                  {% else %}<span class="muted">—</span>{% endif %}</td></tr>
+          <tr><th>FreeRADIUS wired to ntlm_auth</th>
+              <td>{% if status.ntlm_auth_configured %}<span class="pill pill-ok">{{ icon('check', 12) }} yes</span>
+                  {% else %}<span class="pill pill-bad">{{ icon('x', 12) }} no</span>{% endif %}</td></tr>
+        </tbody>
+      </table>
+    </div>
+    {% if status.detail and not status.joined %}
+      <p class="hint"><code>net ads testjoin</code>: {{ status.detail }}</p>
+    {% endif %}
+  {% endif %}
+
+  {% if status and not status.joined %}
+    <h2 class="section-title">Join a domain</h2>
+    <div class="card card-wide">
+      <p class="lead">
+        Joining lets FreeRADIUS check MS-CHAP passwords against the directory
+        through <code>ntlm_auth</code>, so domain users authenticate without a
+        password being copied here. Local users are unaffected — they keep
+        authenticating against the database.
+      </p>
+      <form method="post" action="{{ url_for('directory_join') }}"
+            data-confirm="Join the domain? This rewrites the Kerberos and Samba configuration on this server.">
+        <div class="field">
+          <label for="realm">{{ icon('server') }} Realm</label>
+          <input type="text" id="realm" name="realm" required placeholder="example.company.local"
+                 autocapitalize="off" autocorrect="off" spellcheck="false">
+          <p class="hint">The AD DNS domain. This server must be able to resolve its SRV records.</p>
+        </div>
+        <div class="field">
+          <label for="workgroup">{{ icon('layers') }} NetBIOS domain</label>
+          <input type="text" id="workgroup" name="workgroup" required placeholder="EXAMPLE"
+                 autocapitalize="characters" autocorrect="off" spellcheck="false">
+          <p class="hint">
+            The short pre-Windows-2000 name. It is often <em>not</em> the first
+            part of the realm — check with
+            <code>net ads lookup -S &lt;dc-address&gt;</code>.
+          </p>
+        </div>
+        <div class="field">
+          <label for="dc">{{ icon('server') }} Domain controller <span class="muted">(optional)</span></label>
+          <input type="text" id="dc" name="dc" placeholder="dc01.example.company.local"
+                 autocapitalize="off" autocorrect="off" spellcheck="false">
+          <p class="hint">Leave blank to discover one from DNS.</p>
+        </div>
+        <div class="field">
+          <label for="username">{{ icon('users') }} Account allowed to join computers</label>
+          <input type="text" id="username" name="username" required placeholder="Administrator"
+                 autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="password">{{ icon('lock') }} Password</label>
+          <input type="password" id="password" name="password" required autocomplete="off">
+          <p class="hint">Used once to perform the join. It is never written to disk or logged.</p>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">{{ icon('shield') }} Join domain</button>
+        </div>
+      </form>
+    </div>
+  {% elif status and status.joined %}
+    <h2 class="section-title">Maintenance</h2>
+    <div class="split">
+      <div class="card card-wide">
+        <h2>Re-apply FreeRADIUS wiring</h2>
+        <p class="hint">
+          Points <code>rlm_mschap</code> at <code>ntlm_auth</code> for this
+          domain and restarts FreeRADIUS. Useful after editing the RADIUS
+          configuration by hand.
+        </p>
+        <form method="post" action="{{ url_for('directory_reapply') }}">
+          <input type="hidden" name="workgroup" value="{{ status.workgroup or '' }}">
+          <div class="form-actions">
+            <button type="submit" class="btn">{{ icon('save') }} Re-apply</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="card card-wide confirm-box">
+        <h2>Leave the domain</h2>
+        <p class="hint">
+          Removes this server's computer account and stops winbind. Mapped
+          directory accounts keep their group rows but can no longer
+          authenticate.
+        </p>
+        <form method="post" action="{{ url_for('directory_leave') }}"
+              data-confirm="Leave the domain? Directory users will stop authenticating immediately.">
+          <div class="field">
+            <label for="leave_user">{{ icon('users') }} Account</label>
+            <input type="text" id="leave_user" name="username" required
+                   autocomplete="off" autocapitalize="off">
+          </div>
+          <div class="field">
+            <label for="leave_pass">{{ icon('lock') }} Password</label>
+            <input type="password" id="leave_pass" name="password" required autocomplete="off">
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-danger">{{ icon('log-out') }} Leave domain</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  {% endif %}
+{% endblock %}
